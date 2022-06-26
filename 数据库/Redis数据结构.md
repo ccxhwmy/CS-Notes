@@ -336,7 +336,7 @@ typedef struct dictEntry {
 - 在 rehash 进行期间，每次哈希表元素进行新增、删除、查找或者更新操作时，Rehash 除了会执行相应的操作之外，还会顺序将 哈希表1 中索引位置上的所有 key-value 迁移到 哈希表2 上；
 - 随着处理客户端发起的哈希表操作请求数量越多，最终在某个时刻，会把 哈希表1 的所有 key-value 迁移到 哈希表2，从而完成 rehash 操作。
 
-#### rehas 触发条件
+#### rehash 触发条件
 
 ​	rehash 的触发条件跟负载因子（load factor）有关系。
 
