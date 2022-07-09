@@ -50,9 +50,28 @@ TCP 在设计的时候，做了充分的容错性设计，比如，TCP 假设报
 
 在高并发的情况下，如果我们想对 TIME_WAIT 做一些优化，来解决我们一开始提到的例子，该如何办呢？
 
-#### net.ipv4.tcp_max_tw_buckets
+#### ip_conntrack
 
-一个暴力的方法是通过 sysctl 命令，将系统值调小。这个值默认为 18000，当系统中处于 TIME_WAIT 的连接一旦超过这个值时，系统就会将所有的 TIME_WAIT 连接状态重置，并且只打印出警告信息。这个方法过于暴力，而且治标不治本，带来的问题远比解决的问题多，不推荐使用。
+顾名思义就是跟踪连接。一旦激活了此模块，就能在系统参数里发现很多用来控制网络连接状态超时的设置，其中自然也包括 TIME_WAIT：
+
+```shell
+shell> modprobe ip_conntrack
+shell> sysctl net.ipv4.netfilter.ip_conntrack_tcp_timeout_time_wait
+```
+
+我们可以尝试缩小它的设置，比如十秒，甚至一秒，具体设置成多少合适取决于网络情况而定，但 ip_conntrack 引入的问题可能比解决的还多，比如性能会大幅下降，所以不建议使用。
+
+#### tcp_tw_recycle
+
+顾名思义就是回收 TIME_WAIT 连接。可以说这个内核参数已经变成了大众处理 TIME_WAIT 的万金油，如果你在网络上搜索 TIME_WAIT 的解决方案，十有八九会推荐设置它，不过这里隐藏着一个不易察觉的陷阱：
+
+当多个客户端通过 NAT 方式联网并与服务端交互时，服务端看到的是同一个 IP，也就是说对服务端而言这些客户端实际上等于同一个，可惜由于这些客户端的时间戳可能存在差异，于是乎从服务端的视角看，便可能出现时间戳错乱的现象，进而直接导致时间戳小的数据包被丢弃。参考：[tcp_tw_recycle和tcp_timestamps导致connect失败问题](http://blog.sina.com.cn/s/blog_781b0c850100znjd.html)。
+
+#### tcp_max_tw_buckets
+
+控制 TIME_WAIT 总数。[官网文档](https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt)说这个选项只是为了阻止一些简单的 Dos 攻击，平常不要人为降低它。如果缩小了它，那么系统会将多余的 TIME_WAIT 删除掉，日志里会显示：`TCP: time wait bucket table overflow`
+
+通过 sysctl 命令，将系统值调小。这个值默认为 18000，当系统中处于 TIME_WAIT 的连接一旦超过这个值时，系统就会将所有的 TIME_WAIT 连接状态重置，并且只打印出警告信息。这个方法过于暴力，而且治标不治本，带来的问题远比解决的问题多，不推荐使用。
 
 #### 调低 TCP_TIMEWAIT_LEN，重新编译系统
 
@@ -87,11 +106,9 @@ setsockopt(s, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
 
 第二种可能为跨院 TIME_WAIT 状态提供了一个可能，不过是一个非常危险的行为，不值得提倡。
 
-#### net.ipv4.tcp_tw_reuse: 更安全的设置
+#### tcp_tw_reuse
 
-那么 Linux 有没有提供更安全的选择呢？
-
-当然有。这就是 net.ipv4.tcp_tw_reuse 选项。
+顾名思义就是复用 TIME_WAIT 连接。当创建新连接的时候，如果可能的话会考虑复用相应的 TIME_WAIT 连接。通常认为 `tcp_tw_reuse` 比 `tcp_tw_recycle` 安全一些，这时因为一来 TIME_WAIT 创建时间超过一秒才可能会被复用；二来只有连接的时间戳是递增的时候才会被复用。
 
 Linux 系统对于 net.ipv4.tcp_tw_reuse 的解释如下：
 
@@ -107,6 +124,8 @@ Allow to reuse TIME-WAIT sockets for new connections when it is safe from protoc
 2. 对应的 TIME_WAIT 状态的连接创建时间超过 1 秒才可以被复用。
 
 使用这个选项，还有一个前提，需要打开对 TCP 时间戳的支持，即 `net.ipv4.tcp_timestamps=1` (默认即为1)。
+
+为什么说只能在连接的发起方，而不能在被连接方使用。举例来说：客户端向服务端发起 HTTP 请求，服务端响应后主动关闭连接，于是 TIME_WAIT 便留在了服务端，此类情况使用 `tcp_tw_reuse` 是无效的，因为服务端是被连接方，所以不存在复用连接一说。
 
 TCP 协议也在与时俱进，RFC 1323 中实现了 TCP 拓展规范，以便保证 TCP 的高可用，并引入了新的 TCP 选项，两个 4 字节的时间戳字段，用于记录 TCP 发送方的当前时间戳和从对端接收到的最新时间戳。由于引入了时间戳，前面提到的 2MSL 问题就不复存在了，因为重复的数据包会因为时间戳过期被自然丢弃。
 
@@ -165,3 +184,4 @@ TCP 协议也在与时俱进，RFC 1323 中实现了 TCP 拓展规范，以便�
 ### 参考资料
 
 - 极客时间《网络编程实战》
+- https://blog.huoding.com/2013/12/31/316
